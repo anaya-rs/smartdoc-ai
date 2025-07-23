@@ -1,5 +1,3 @@
-Here's the text you can copy-paste directly for your README.md:
-
 ```
 # SmartDoc AI
 
