@@ -1,25 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartDoc AI - README</title>
-    <style>
-        body { font-family: 'Segoe UI', Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; }
-        h1 { color: #2563eb; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
-        h2 { color: #1e293b; margin-top: 30px; }
-        h3 { color: #64748b; }
-        code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: 'Courier New', monospace; }
-        pre { background: #f8fafc; padding: 15px; border-radius: 8px; border-left: 4px solid #2563eb; overflow-x: auto; }
-        .badge { background: #2563eb; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-        .warning { background: #fef3c7; padding: 10px; border-left: 4px solid #f59e0b; border-radius: 4px; }
-        .success { background: #d1fae5; padding: 10px; border-left: 4px solid #10b981; border-radius: 4px; }
-        ul { padding-left: 20px; }
-        li { margin: 5px 0; }
-    </style>
-</head>
-<body>
-
 <h1>🧠 SmartDoc AI</h1>
 
 <p><span class="badge">React</span> <span class="badge">FastAPI</span> <span class="badge">EasyOCR</span> <span class="badge">SQLite</span></p>
@@ -134,8 +112,6 @@
 <h2>🔧 Development</h2>
 <p>The application supports hot reloading in development mode. Changes to frontend files will automatically refresh, and backend changes will restart the server.</p>
 
-<h2>📝 License</h2>
-<p>MIT License</p>
 
 <hr>
 
