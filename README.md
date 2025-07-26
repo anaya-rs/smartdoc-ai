@@ -1,5 +1,3 @@
-
-```markdown
 # SmartDoc AI
 
 AI-powered document processing system with OCR capabilities and modern UI.
@@ -46,3 +44,4 @@ npm start
 ## Tech Stack
 - Backend: FastAPI, EasyOCR, SQLAlchemy
 - Frontend: React, Bootstrap
+
