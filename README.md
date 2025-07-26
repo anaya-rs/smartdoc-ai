@@ -1,48 +1,47 @@
 # SmartDoc AI
 
-AI-powered document processing system with OCR and natural language Q&A capabilities.
+AI-powered document processing system with OCR capabilities and modern UI.
 
-## Quick Start
+## Quick Setup
 
-### Backend Setup
-
-1. Navigate to backend directory:
+### Backend
+```
 cd backend
-
-2. Create and activate virtual environment:
 python -m venv .venv
 .venv\Scripts\activate
-
-3. Install dependencies:
 pip install fastapi uvicorn sqlalchemy bcrypt python-jose[cryptography] python-multipart pillow PyMuPDF easyocr
-
-4. Run server:
 python run_backend.py
+```
 
-Backend runs at: http://localhost:8000
-
-### Frontend Setup
-
-1. Navigate to frontend directory:
+### Frontend
+```
 cd frontend
-
-2. Install dependencies:
 npm install
-
-3. Start application:
 npm start
+```
 
-Frontend runs at: http://localhost:3000
+## Access
+- App: http://localhost:3000
+- API: http://localhost:8000/docs
 
-## Default Login
+## Login
+- Username: admin
+- Password: admin123
 
-Username: admin
-Password: admin123
+## Usage
+1. Start both backend and frontend
+2. Login with credentials above
+3. Upload documents via drag & drop
+4. Documents are auto-processed with OCR
+5. View results in dashboard
 
 ## Features
+- PDF/Image upload with OCR text extraction
+- Document classification and template generation
+- Natural language Q&A about document content
+- Professional UI with responsive design
 
-Document upload (PDF, PNG, JPG, TIFF)
-OCR text extraction  
-Document classification
-Natural language Q&A
-Data redaction
+## Tech Stack
+- Backend: FastAPI, EasyOCR, SQLAlchemy
+- Frontend: React, Bootstrap
+
