@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
-  Row, Col, Card, Button, Table, Alert, Spinner, Tabs, Tab, 
-  Badge, Form, Modal, ProgressBar 
+  Container, Row, Col, Card, Button, Tabs, Tab, Badge, Alert, 
+  Spinner, Modal, Dropdown, ButtonGroup 
 } from 'react-bootstrap';
 import axios from 'axios';
 import QuestionAnswer from '../components/QuestionAnswer';
+import ProcessingStatus from '../components/ProcessingStatus';
+import { useDocumentProcessing } from '../hooks/useWebSocket';
 
 const DocumentViewer = () => {
   const { id } = useParams();
@@ -14,13 +16,20 @@ const DocumentViewer = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
-  const [showExportModal, setShowExportModal] = useState(false);
+  const [showRedactModal, setShowRedactModal] = useState(false);
+  const [redactionOptions, setRedactionOptions] = useState({
+    names: true,
+    emails: true,
+    phones: true,
+    ssn: true,
+    addresses: true,
+    dates_of_birth: true,
+    credit_cards: true
+  });
 
-  useEffect(() => {
-    fetchDocument();
-  }, [id]);
+  const { processingStatus, isConnected } = useDocumentProcessing(id);
 
-  const fetchDocument = async () => {
+  const fetchDocument = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -32,529 +41,712 @@ const DocumentViewer = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
 
-  // Download functions
-  const downloadText = () => {
+  useEffect(() => {
+    fetchDocument();
+  }, [fetchDocument]);
+
+  const handleRedact = async () => {
     try {
-      const text = document.redacted_data?.redacted_text || document.extracted_text || 'No text available';
-      const blob = new Blob([text], { type: 'text/plain' });
-      const url = window.URL.createObjectURL(blob);
-      const link = window.document.createElement('a');
-      link.href = url;
-      link.download = `${document.filename}_extracted_text.txt`;
-      link.style.display = 'none';
-      window.document.body.appendChild(link);
-      link.click();
-      window.document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Text download failed:', error);
-      alert('Text download failed. Please try again.');
+      await axios.post(`/redact/${id}`, redactionOptions);
+      setShowRedactModal(false);
+      fetchDocument();
+    } catch (err) {
+      setError('Redaction failed: ' + (err.response?.data?.detail || err.message));
     }
   };
 
-  const downloadJSON = (data, filename) => {
+  const downloadFile = (type) => {
     try {
-      const json = JSON.stringify(data, null, 2);
-      const blob = new Blob([json], { type: 'application/json' });
+      let content, filename, mimeType;
+      
+      switch(type) {
+        case 'text':
+          content = document.extracted_text || 'No text available';
+          filename = `${document.filename}_extracted_text.txt`;
+          mimeType = 'text/plain';
+          break;
+        case 'json':
+          content = JSON.stringify(document, null, 2);
+          filename = `${document.filename}_data.json`;
+          mimeType = 'application/json';
+          break;
+        case 'csv':
+          if (document.tables && document.tables.length > 0) {
+            content = document.tables[0].csv || 'No table data available';
+            filename = `${document.filename}_table.csv`;
+            mimeType = 'text/csv';
+          } else {
+            content = 'No table data available';
+            filename = `${document.filename}_table.csv`;
+            mimeType = 'text/csv';
+          }
+          break;
+        default:
+          return;
+      }
+      
+      const blob = new Blob([content], { type: mimeType });
       const url = window.URL.createObjectURL(blob);
       const link = window.document.createElement('a');
       link.href = url;
-      link.download = `${filename}_data.json`;
-      link.style.display = 'none';
-      window.document.body.appendChild(link);
+      link.download = filename;
       link.click();
-      window.document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
     } catch (error) {
-      console.error('JSON download failed:', error);
-      alert('JSON download failed. Please try again.');
-    }
-  };
-
-  const downloadCSV = (tableData, filename) => {
-    try {
-      const csv = tableData.csv || 'No CSV data available';
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = window.URL.createObjectURL(blob);
-      const link = window.document.createElement('a');
-      link.href = url;
-      link.download = `${filename}_table.csv`;
-      link.style.display = 'none';
-      window.document.body.appendChild(link);
-      link.click();
-      window.document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('CSV download failed:', error);
-      alert('CSV download failed. Please try again.');
+      console.error('Download failed:', error);
     }
   };
 
   const getStatusColor = (status) => {
     const colors = {
       'completed': 'success',
-      'processing': 'warning',
+      'processing': 'warning', 
       'failed': 'danger',
       'uploaded': 'primary'
     };
     return colors[status] || 'secondary';
   };
 
-  const getStatusIcon = (status) => {
+  const getConfidenceColor = (confidence) => {
+    if (confidence >= 0.9) return 'success';
+    if (confidence >= 0.7) return 'warning';
+    return 'danger';
+  };
+
+  const getRedactionIcon = (type) => {
     const icons = {
-      'completed': 'fa-check-circle',
-      'processing': 'fa-spinner fa-spin',
-      'failed': 'fa-exclamation-triangle',
-      'uploaded': 'fa-upload'
+      'names': 'user',
+      'emails': 'envelope',
+      'phones': 'phone',
+      'ssn': 'id-card',
+      'addresses': 'map-marker-alt',
+      'dates_of_birth': 'birthday-cake',
+      'credit_cards': 'credit-card'
     };
-    return icons[status] || 'fa-circle';
+    return icons[type] || 'shield-alt';
   };
 
   if (loading) {
     return (
-      <div className="document-viewer-container py-5">
-        <div className="container-fluid">
-          <div className="text-center py-5">
-            <div className="loading-spinner mx-auto mb-3"></div>
-            <h5 className="text-muted">Loading document...</h5>
-          </div>
+      <Container fluid className="py-5">
+        <div className="d-flex flex-column align-items-center justify-content-center" style={{minHeight: '60vh'}}>
+          <Spinner animation="border" variant="primary" style={{width: '3rem', height: '3rem'}} />
+          <h5 className="text-muted mt-3">Loading document...</h5>
+          <p className="text-muted">Please wait while we fetch your document</p>
         </div>
-      </div>
+      </Container>
     );
   }
 
   if (error) {
     return (
-      <div className="document-viewer-container py-5">
-        <div className="container-fluid">
-          <Alert variant="danger" className="text-center">
-            <i className="fas fa-exclamation-triangle fa-2x mb-3"></i>
-            <h5>Error Loading Document</h5>
-            <p>{error}</p>
+      <Container fluid className="py-4">
+        <Alert variant="danger" className="text-center py-5">
+          <i className="fas fa-exclamation-triangle fa-3x mb-3 text-danger"></i>
+          <h4>Unable to Load Document</h4>
+          <p className="mb-4">{error}</p>
+          <ButtonGroup>
+            <Button variant="outline-primary" onClick={fetchDocument}>
+              <i className="fas fa-redo me-2"></i>
+              Try Again
+            </Button>
             <Button variant="primary" onClick={() => navigate('/documents')}>
               <i className="fas fa-arrow-left me-2"></i>
               Back to Documents
             </Button>
-          </Alert>
-        </div>
-      </div>
+          </ButtonGroup>
+        </Alert>
+      </Container>
     );
   }
 
   return (
-    <div className="document-viewer-container fade-in">
-      <div className="container-fluid py-4">
-        {/* Modern Header */}
-        <div className="row mb-4">
-          <div className="col-12">
-            <div className="d-flex justify-content-between align-items-start">
-              <div className="flex-grow-1">
-                <div className="d-flex align-items-center mb-2">
-                  <Button 
-                    variant="outline-secondary" 
-                    onClick={() => navigate('/documents')}
-                    className="me-3"
+    <Container fluid className="py-4">
+      {/* Header */}
+      <div className="document-header mb-4">
+        <Row className="align-items-center">
+          <Col md={8}>
+            <div className="d-flex align-items-center">
+              <Button 
+                variant="outline-secondary" 
+                onClick={() => navigate('/documents')}
+                className="me-4 d-flex align-items-center"
+              >
+                <i className="fas fa-arrow-left me-2"></i>
+                Back
+              </Button>
+              
+              <div className="document-info flex-grow-1">
+                <h1 className="h3 fw-bold mb-2 text-primary">{document.filename}</h1>
+                <div className="d-flex align-items-center gap-3 flex-wrap">
+                  <Badge 
+                    bg={getStatusColor(document.status)} 
+                    className="px-3 py-2 d-flex align-items-center gap-2"
                   >
-                    <i className="fas fa-arrow-left me-2"></i>
-                    Back
-                  </Button>
-                  <div>
-                    <h1 className="h3 fw-bold mb-1">{document.filename}</h1>
-                    <div className="d-flex align-items-center gap-3">
-                      <Badge 
-                        bg={getStatusColor(document.status)}
-                        className="d-flex align-items-center gap-1 px-3 py-2"
-                      >
-                        <i className={`fas ${getStatusIcon(document.status)}`}></i>
-                        {document.status}
-                      </Badge>
-                      {document.document_type && (
-                        <Badge bg="primary" className="px-3 py-2 text-capitalize">
-                          {document.document_type.replace('_', ' ')}
-                        </Badge>
-                      )}
-                      {document.confidence_score && (
-                        <Badge bg="info" className="px-3 py-2">
-                          {Math.round(document.confidence_score * 100)}% Confidence
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
+                    <i className={`fas fa-${document.status === 'completed' ? 'check-circle' : 
+                                              document.status === 'processing' ? 'spinner fa-spin' : 
+                                              document.status === 'failed' ? 'exclamation-triangle' : 'upload'}`}></i>
+                    {document.status.charAt(0).toUpperCase() + document.status.slice(1)}
+                  </Badge>
+                  
+                  {isConnected && (
+                    <Badge bg="success" className="px-2 py-1">
+                      <i className="fas fa-wifi me-1"></i>
+                      Live Updates
+                    </Badge>
+                  )}
+                  
+                  {document.document_type && (
+                    <Badge bg="primary" className="px-3 py-2 text-capitalize">
+                      <i className="fas fa-tag me-2"></i>
+                      {document.document_type.replace('_', ' ')}
+                    </Badge>
+                  )}
+                  
+                  {document.confidence_score && (
+                    <Badge bg={getConfidenceColor(document.confidence_score)} className="px-3 py-2">
+                      <i className="fas fa-chart-line me-2"></i>
+                      {Math.round(document.confidence_score * 100)}% Confidence
+                    </Badge>
+                  )}
+                  
+                  <Badge bg="light" text="dark" className="px-3 py-2">
+                    <i className="fas fa-calendar me-2"></i>
+                    {new Date(document.created_at).toLocaleDateString()}
+                  </Badge>
                 </div>
-              </div>
-              <div className="d-flex gap-2">
-                <Button 
-                  variant="outline-primary"
-                  onClick={() => setShowExportModal(true)}
-                  className="d-flex align-items-center gap-2"
-                >
-                  <i className="fas fa-download"></i>
-                  Export
-                </Button>
-                <Button 
-                  variant="outline-success"
-                  onClick={fetchDocument}
-                  className="d-flex align-items-center gap-2"
-                >
-                  <i className="fas fa-sync-alt"></i>
-                  Refresh
-                </Button>
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Main Content */}
-        <div className="row g-4">
-          {/* Left Column - Document Info */}
-          <div className="col-lg-4">
-            <Card className="border-0 shadow-sm mb-4">
-              <Card.Header className="bg-transparent border-bottom border-light">
-                <div className="d-flex align-items-center">
-                  <div className="bg-primary bg-opacity-10 rounded-circle p-2 me-3">
-                    <i className="fas fa-info-circle text-primary"></i>
-                  </div>
-                  <h5 className="mb-0 fw-semibold">Document Information</h5>
-                </div>
-              </Card.Header>
-              <Card.Body className="p-4">
-                <div className="d-flex flex-column gap-3">
-                  <div className="d-flex justify-content-between">
-                    <span className="text-muted">File Name:</span>
-                    <span className="fw-medium text-end">{document.filename}</span>
-                  </div>
-                  <div className="d-flex justify-content-between">
-                    <span className="text-muted">Document Type:</span>
-                    <Badge bg="light" text="dark" className="text-capitalize">
-                      {document.document_type || 'Unknown'}
-                    </Badge>
-                  </div>
-                  <div className="d-flex justify-content-between">
-                    <span className="text-muted">Status:</span>
-                    <Badge bg={getStatusColor(document.status)}>
-                      {document.status}
-                    </Badge>
-                  </div>
-                  {document.confidence_score && (
-                    <div className="d-flex justify-content-between">
-                      <span className="text-muted">Confidence:</span>
-                      <div className="text-end">
-                        <div className="small fw-medium">{Math.round(document.confidence_score * 100)}%</div>
-                        <ProgressBar 
-                          now={document.confidence_score * 100} 
-                          style={{height: '4px', width: '60px'}}
-                          variant={document.confidence_score > 0.8 ? 'success' : document.confidence_score > 0.6 ? 'warning' : 'danger'}
-                        />
-                      </div>
-                    </div>
+          </Col>
+          
+          <Col md={4} className="text-end">
+            <ButtonGroup>
+              <Dropdown>
+                <Dropdown.Toggle variant="outline-primary" id="export-dropdown">
+                  <i className="fas fa-download me-2"></i>
+                  Export
+                </Dropdown.Toggle>
+                <Dropdown.Menu>
+                  <Dropdown.Item onClick={() => downloadFile('text')}>
+                    <i className="fas fa-file-alt me-2"></i>
+                    Text File (.txt)
+                  </Dropdown.Item>
+                  <Dropdown.Item onClick={() => downloadFile('json')}>
+                    <i className="fas fa-code me-2"></i>
+                    JSON Data (.json)
+                  </Dropdown.Item>
+                  {document.tables?.length > 0 && (
+                    <Dropdown.Item onClick={() => downloadFile('csv')}>
+                      <i className="fas fa-table me-2"></i>
+                      Table Data (.csv)
+                    </Dropdown.Item>
                   )}
-                  <div className="d-flex justify-content-between">
-                    <span className="text-muted">Created:</span>
-                    <span className="small text-end">
-                      {new Date(document.created_at).toLocaleDateString()}
-                      <br />
-                      <span className="text-muted">
-                        {new Date(document.created_at).toLocaleTimeString()}
-                      </span>
-                    </span>
-                  </div>
-                  {document.processed_at && (
-                    <div className="d-flex justify-content-between">
-                      <span className="text-muted">Processed:</span>
-                      <span className="small text-end">
-                        {new Date(document.processed_at).toLocaleDateString()}
-                        <br />
-                        <span className="text-muted">
-                          {new Date(document.processed_at).toLocaleTimeString()}
-                        </span>
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </Card.Body>
-            </Card>
-
-            {/* Quick Stats */}
-            <Card className="border-0 shadow-sm">
-              <Card.Header className="bg-transparent border-bottom border-light">
-                <div className="d-flex align-items-center">
-                  <div className="bg-success bg-opacity-10 rounded-circle p-2 me-3">
-                    <i className="fas fa-chart-bar text-success"></i>
-                  </div>
-                  <h5 className="mb-0 fw-semibold">Extraction Stats</h5>
-                </div>
-              </Card.Header>
-              <Card.Body className="p-4">
-                <div className="row g-3">
-                  <div className="col-6">
-                    <div className="text-center">
-                      <div className="h4 fw-bold text-primary mb-1">
-                        {document.extracted_text ? document.extracted_text.split(' ').length : 0}
-                      </div>
-                      <div className="small text-muted">Words</div>
-                    </div>
-                  </div>
-                  <div className="col-6">
-                    <div className="text-center">
-                      <div className="h4 fw-bold text-success mb-1">
-                        {document.tables?.length || 0}
-                      </div>
-                      <div className="small text-muted">Tables</div>
-                    </div>
-                  </div>
-                  <div className="col-6">
-                    <div className="text-center">
-                      <div className="h4 fw-bold text-warning mb-1">
-                        {document.key_value_pairs?.extracted_pairs ? 
-                          Object.keys(document.key_value_pairs.extracted_pairs).length : 0}
-                      </div>
-                      <div className="small text-muted">Key-Values</div>
-                    </div>
-                  </div>
-                  <div className="col-6">
-                    <div className="text-center">
-                      <div className="h4 fw-bold text-info mb-1">
-                        {document.extracted_text ? document.extracted_text.length : 0}
-                      </div>
-                      <div className="small text-muted">Characters</div>
-                    </div>
-                  </div>
-                </div>
-              </Card.Body>
-            </Card>
-          </div>
-
-          {/* Right Column - Document Content */}
-          <div className="col-lg-8">
-            <Card className="border-0 shadow-sm">
-              <Card.Header className="bg-transparent border-bottom border-light">
-                <div className="d-flex align-items-center">
-                  <div className="bg-info bg-opacity-10 rounded-circle p-2 me-3">
-                    <i className="fas fa-file-alt text-info"></i>
-                  </div>
-                  <h5 className="mb-0 fw-semibold">Document Content</h5>
-                </div>
-              </Card.Header>
-              <Card.Body className="p-0">
-                <Tabs 
-                  activeKey={activeTab} 
-                  onSelect={setActiveTab} 
-                  className="px-4 pt-3"
-                  variant="pills"
+                </Dropdown.Menu>
+              </Dropdown>
+              
+              {document.status === 'completed' && (
+                <Button 
+                  variant="outline-warning"
+                  onClick={() => setShowRedactModal(true)}
                 >
-                  {/* Overview Tab */}
-                  <Tab eventKey="overview" title={
-                    <span><i className="fas fa-eye me-2"></i>Overview</span>
-                  }>
-                    <div className="p-4">
-                      {document.extracted_text ? (
-                        <div className="bg-light rounded p-4" style={{maxHeight: '500px', overflowY: 'auto'}}>
-                          <h6 className="mb-3 fw-semibold">Extracted Text</h6>
-                          <pre className="mb-0" style={{whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '14px', lineHeight: '1.6'}}>
-                            {document.extracted_text}
-                          </pre>
-                        </div>
-                      ) : (
-                        <div className="text-center py-5">
-                          <i className="fas fa-file-alt fa-3x text-muted mb-3"></i>
-                          <h6 className="text-muted">No text extracted</h6>
-                          <p className="text-muted">This document may be image-based or processing failed.</p>
-                        </div>
-                      )}
-                    </div>
-                  </Tab>
+                  <i className="fas fa-user-secret me-2"></i>
+                  Redact
+                </Button>
+              )}
+              
+              <Button variant="outline-success" onClick={fetchDocument}>
+                <i className="fas fa-sync-alt me-2"></i>
+                Refresh
+              </Button>
+            </ButtonGroup>
+          </Col>
+        </Row>
+      </div>
 
-                  {/* Key-Value Pairs Tab */}
-                  <Tab eventKey="keyvalue" title={
-                    <span><i className="fas fa-key me-2"></i>Key-Value Pairs</span>
-                  }>
-                    <div className="p-4">
-                      {document.key_value_pairs?.extracted_pairs && 
-                       Object.keys(document.key_value_pairs.extracted_pairs).length > 0 ? (
+      {/* Processing Status */}
+      {processingStatus && document.status === 'processing' && (
+        <ProcessingStatus 
+          status={processingStatus} 
+          className="mb-4"
+        />
+      )}
+
+      {/* Statistics */}
+      {document.extracted_text && (
+        <Card className="mb-4 border-0 shadow-sm">
+          <Card.Body className="py-3">
+            <Row className="text-center">
+              <Col md={3}>
+                <div className="stat-item">
+                  <h4 className="fw-bold text-primary mb-1">
+                    {document.extracted_text.split(' ').length.toLocaleString()}
+                  </h4>
+                  <small className="text-muted">Total Words</small>
+                </div>
+              </Col>
+              <Col md={3}>
+                <div className="stat-item">
+                  <h4 className="fw-bold text-success mb-1">
+                    {document.tables?.length || 0}
+                  </h4>
+                  <small className="text-muted">Tables Found</small>
+                </div>
+              </Col>
+              <Col md={3}>
+                <div className="stat-item">
+                  <h4 className="fw-bold text-warning mb-1">
+                    {document.key_value_pairs?.extracted_pairs ? 
+                      Object.keys(document.key_value_pairs.extracted_pairs).length : 0}
+                  </h4>
+                  <small className="text-muted">Key-Value Pairs</small>
+                </div>
+              </Col>
+              <Col md={3}>
+                <div className="stat-item">
+                  <h4 className="fw-bold text-info mb-1">
+                    {document.extracted_text.length.toLocaleString()}
+                  </h4>
+                  <small className="text-muted">Characters</small>
+                </div>
+              </Col>
+            </Row>
+          </Card.Body>
+        </Card>
+      )}
+
+      {/* Main Content Tabs */}
+      <Card className="border-0 shadow-sm">
+        <Tabs 
+          activeKey={activeTab} 
+          onSelect={setActiveTab}
+          className="nav-tabs-custom border-bottom"
+          fill
+        >
+          {/* Overview Tab with AI Overview */}
+          <Tab 
+            eventKey="overview" 
+            title={
+              <span className="tab-title">
+                <i className="fas fa-chart-line me-2"></i>
+                Overview
+              </span>
+            }
+          >
+            <div className="p-4">
+              <Row className="g-4">
+                <Col lg={8}>
+                  <Card className="h-100 border-light">
+                    <Card.Header className="bg-light border-bottom">
+                      <h6 className="mb-0 fw-semibold">
+                        <i className="fas fa-robot me-2 text-primary"></i>
+                        AI-Generated Document Summary
+                      </h6>
+                    </Card.Header>
+                    <Card.Body>
+                      <div className="summary-text mb-4 p-4 bg-light rounded border-start border-primary border-4">
+                        <h6 className="fw-semibold text-primary mb-3">
+                          <i className="fas fa-brain me-2"></i>
+                          AI Analysis
+                        </h6>
+                        <p className="mb-0" style={{ fontSize: '15px', lineHeight: '1.6' }}>
+                          {document.extracted_data?.ai_overview || 
+                           document.extracted_data?.overview || 
+                           `This document appears to be a ${document.document_type || 'general document'} 
+                            containing approximately ${document.extracted_text ? document.extracted_text.split(' ').length : 0} words. 
+                            ${document.tables?.length > 0 ? ` It includes ${document.tables.length} structured table${document.tables.length > 1 ? 's' : ''}.` : ''}
+                            ${document.key_value_pairs?.extracted_pairs && Object.keys(document.key_value_pairs.extracted_pairs).length > 0 ? 
+                              ` ${Object.keys(document.key_value_pairs.extracted_pairs).length} key-value pairs were extracted.` : ''}
+                            ${document.confidence_score ? ` The document was processed with ${Math.round(document.confidence_score * 100)}% confidence.` : ''}`}
+                        </p>
+                      </div>
+                    </Card.Body>
+                  </Card>
+                </Col>
+
+                <Col lg={4}>
+                  <div className="d-flex flex-column gap-3">
+                    {/* Processing Quality */}
+                    <Card className="border-light">
+                      <Card.Header className="bg-light border-bottom">
+                        <h6 className="mb-0 fw-semibold">
+                          <i className="fas fa-tachometer-alt me-2 text-success"></i>
+                          Processing Quality
+                        </h6>
+                      </Card.Header>
+                      <Card.Body>
+                        <div className="text-center">
+                          <div className="mb-3">
+                            <div 
+                              className="progress-circle mx-auto mb-2" 
+                              style={{
+                                width: '80px',
+                                height: '80px',
+                                borderRadius: '50%',
+                                background: `conic-gradient(#10b981 ${(document.confidence_score || 0) * 360}deg, #e5e7eb 0deg)`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                              }}
+                            >
+                              <div className="bg-white rounded-circle d-flex align-items-center justify-content-center" style={{width: '60px', height: '60px'}}>
+                                <span className="fw-bold text-success">
+                                  {Math.round((document.confidence_score || 0) * 100)}%
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <Badge bg="success" className="px-3 py-2">
+                            {(document.confidence_score || 0) > 0.8 ? 'Excellent' : 
+                            (document.confidence_score || 0) > 0.6 ? 'Good' : 'Fair'} Quality
+                          </Badge>
+                        </div>
+                      </Card.Body>
+                    </Card>
+
+                    {/* Quick Actions */}
+                    <Card className="border-light">
+                      <Card.Header className="bg-light border-bottom">
+                        <h6 className="mb-0 fw-semibold">
+                          <i className="fas fa-bolt me-2 text-warning"></i>
+                          Quick Actions
+                        </h6>
+                      </Card.Header>
+                      <Card.Body>
+                        <div className="d-grid gap-2">
+                          <Button variant="outline-primary" onClick={() => setActiveTab('qa')}>
+                            <i className="fas fa-question-circle me-2"></i>
+                            Ask Questions
+                          </Button>
+                          <Button variant="outline-success" onClick={() => downloadFile('text')}>
+                            <i className="fas fa-download me-2"></i>
+                            Download Text
+                          </Button>
+                          {document.status === 'completed' && (
+                            <Button variant="outline-warning" onClick={() => setShowRedactModal(true)}>
+                              <i className="fas fa-user-secret me-2"></i>
+                              Redact Data
+                            </Button>
+                          )}
+                        </div>
+                      </Card.Body>
+                    </Card>
+                  </div>
+                </Col>
+              </Row>
+            </div>
+          </Tab>
+
+          {/* Full Content Tab */}
+          <Tab 
+            eventKey="content" 
+            title={
+              <span className="tab-title">
+                <i className="fas fa-file-text me-2"></i>
+                Full Content
+              </span>
+            }
+          >
+            <div className="p-4">
+              {document.extracted_text ? (
+                <div>
+                  <div className="d-flex justify-content-between align-items-center mb-3">
+                    <h5 className="mb-0 fw-semibold">Complete Document Text</h5>
+                    <div className="d-flex gap-2">
+                      <Button variant="outline-primary" size="sm" onClick={() => downloadFile('text')}>
+                        <i className="fas fa-download me-1"></i>
+                        Download
+                      </Button>
+                      <Button 
+                        variant="outline-secondary" 
+                        size="sm"
+                        onClick={() => navigator.clipboard.writeText(document.extracted_text)}
+                      >
+                        <i className="fas fa-copy me-1"></i>
+                        Copy
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  <Card className="border-light">
+                    <Card.Body>
+                      <div 
+                        className="content-display p-4 bg-light rounded"
+                        style={{
+                          maxHeight: '70vh',
+                          overflowY: 'auto',
+                          fontFamily: 'Georgia, serif',
+                          fontSize: '14px',
+                          lineHeight: '1.8',
+                          whiteSpace: 'pre-wrap'
+                        }}
+                      >
+                        {document.extracted_text}
+                      </div>
+                    </Card.Body>
+                  </Card>
+                </div>
+              ) : (
+                <div className="text-center py-5">
+                  <i className="fas fa-file-alt fa-4x text-muted mb-4"></i>
+                  <h5 className="text-muted">No Content Available</h5>
+                  <p className="text-muted">This document may not have been processed yet or contains no extractable text.</p>
+                </div>
+              )}
+            </div>
+          </Tab>
+
+          {/* Q&A Tab */}
+          <Tab 
+            eventKey="qa" 
+            title={
+              <span className="tab-title">
+                <i className="fas fa-question-circle me-2"></i>
+                Ask Questions
+              </span>
+            }
+          >
+            <div className="p-4">
+              <QuestionAnswer documentId={id} />
+            </div>
+          </Tab>
+
+          {/* Key-Value Tab */}
+          <Tab 
+            eventKey="keyvalue" 
+            title={
+              <span className="tab-title">
+                <i className="fas fa-key me-2"></i>
+                Key Data
+                {document.key_value_pairs?.extracted_pairs && 
+                 Object.keys(document.key_value_pairs.extracted_pairs).length > 0 && (
+                  <Badge bg="primary" className="ms-2">
+                    {Object.keys(document.key_value_pairs.extracted_pairs).length}
+                  </Badge>
+                )}
+              </span>
+            }
+          >
+            <div className="p-4">
+              {document.key_value_pairs?.extracted_pairs && 
+               Object.keys(document.key_value_pairs.extracted_pairs).length > 0 ? (
+                <div>
+                  <div className="d-flex justify-content-between align-items-center mb-4">
+                    <h5 className="mb-0 fw-semibold">Extracted Key-Value Pairs</h5>
+                    <Button 
+                      variant="outline-primary" 
+                      size="sm"
+                      onClick={() => downloadFile('json')}
+                    >
+                      <i className="fas fa-download me-1"></i>
+                      Export Data
+                    </Button>
+                  </div>
+                  
+                  <Card className="border-light">
+                    <Card.Body className="p-0">
+                      <div className="table-responsive">
+                        <table className="table table-hover mb-0">
+                          <thead className="table-light">
+                            <tr>
+                              <th className="fw-semibold">Key</th>
+                              <th className="fw-semibold">Value</th>
+                              <th className="fw-semibold text-center">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(document.key_value_pairs.extracted_pairs).map(([key, value]) => (
+                              <tr key={key}>
+                                <td>
+                                  <span className="fw-medium text-capitalize text-primary">
+                                    {key.replace(/_/g, ' ')}
+                                  </span>
+                                </td>
+                                <td>
+                                  <code className="bg-light px-3 py-2 rounded border">
+                                    {Array.isArray(value) ? value.join(', ') : value}
+                                  </code>
+                                </td>
+                                <td className="text-center">
+                                  <Button 
+                                    variant="outline-primary" 
+                                    size="sm"
+                                    onClick={() => navigator.clipboard.writeText(value)}
+                                    title="Copy to clipboard"
+                                  >
+                                    <i className="fas fa-copy"></i>
+                                  </Button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card.Body>
+                  </Card>
+                </div>
+              ) : (
+                <div className="text-center py-5">
+                  <i className="fas fa-key fa-4x text-muted mb-4"></i>
+                  <h5 className="text-muted">No Key-Value Pairs Found</h5>
+                  <p className="text-muted">This document doesn't contain recognizable structured data patterns.</p>
+                </div>
+              )}
+            </div>
+          </Tab>
+
+          {/* Tables Tab */}
+          <Tab 
+            eventKey="tables" 
+            title={
+              <span className="tab-title">
+                <i className="fas fa-table me-2"></i>
+                Tables
+                {document.tables?.length > 0 && (
+                  <Badge bg="success" className="ms-2">
+                    {document.tables.length}
+                  </Badge>
+                )}
+              </span>
+            }
+          >
+            <div className="p-4">
+              {document.tables?.length > 0 ? (
+                <div className="d-flex flex-column gap-4">
+                  {document.tables.map((table, index) => (
+                    <Card key={index} className="border-light">
+                      <Card.Header className="bg-light d-flex justify-content-between align-items-center">
+                        <h6 className="mb-0 fw-semibold">
+                          <i className="fas fa-table me-2 text-success"></i>
+                          Table {table.table_id || index + 1}
+                          {table.page && <span className="text-muted ms-2">(Page {table.page})</span>}
+                        </h6>
+                        <div className="d-flex gap-2 align-items-center">
+                          {table.accuracy && (
+                            <Badge bg="info">
+                              <i className="fas fa-chart-line me-1"></i>
+                              {table.accuracy}% Accuracy
+                            </Badge>
+                          )}
+                          <Button 
+                            variant="outline-success" 
+                            size="sm"
+                            onClick={() => downloadFile('csv')}
+                          >
+                            <i className="fas fa-download me-1"></i>
+                            CSV
+                          </Button>
+                        </div>
+                      </Card.Header>
+                      <Card.Body className="p-0">
                         <div className="table-responsive">
-                          <table className="table table-hover">
-                            <thead className="table-light">
+                          <table className="table table-striped mb-0">
+                            <thead className="table-dark">
                               <tr>
-                                <th style={{width: '30%'}}>Key</th>
-                                <th style={{width: '60%'}}>Value</th>
-                                <th style={{width: '10%'}}>Actions</th>
+                                <th className="text-center">#</th>
+                                {table.data[0] && Object.keys(table.data[0]).map((header, idx) => (
+                                  <th key={idx} className="fw-semibold">{header}</th>
+                                ))}
                               </tr>
                             </thead>
                             <tbody>
-                              {Object.entries(document.key_value_pairs.extracted_pairs).map(([key, value]) => (
-                                <tr key={key}>
-                                  <td>
-                                    <span className="fw-medium text-capitalize">
-                                      {key.replace(/_/g, ' ')}
-                                    </span>
-                                  </td>
-                                  <td>
-                                    <code className="bg-light px-2 py-1 rounded">
-                                      {Array.isArray(value) ? value.join(', ') : value}
-                                    </code>
-                                  </td>
-                                  <td>
-                                    <Button 
-                                      variant="outline-primary" 
-                                      size="sm"
-                                      onClick={() => navigator.clipboard.writeText(value)}
-                                    >
-                                      <i className="fas fa-copy"></i>
-                                    </Button>
-                                  </td>
+                              {table.data.slice(0, 10).map((row, rowIdx) => (
+                                <tr key={rowIdx}>
+                                  <td className="text-center text-muted fw-medium">{rowIdx + 1}</td>
+                                  {Object.values(row).map((cell, cellIdx) => (
+                                    <td key={cellIdx}>{cell || '—'}</td>
+                                  ))}
                                 </tr>
                               ))}
                             </tbody>
                           </table>
+                          {table.data.length > 10 && (
+                            <div className="text-center p-3 bg-light">
+                              <small className="text-muted">
+                                Showing 10 of {table.data.length} rows. 
+                                <Button variant="link" size="sm" onClick={() => downloadFile('csv')}>
+                                  Download full table
+                                </Button>
+                              </small>
+                            </div>
+                          )}
                         </div>
-                      ) : (
-                        <div className="text-center py-5">
-                          <i className="fas fa-key fa-3x text-muted mb-3"></i>
-                          <h6 className="text-muted">No key-value pairs found</h6>
-                          <p className="text-muted">This document doesn't contain structured data patterns.</p>
-                        </div>
-                      )}
-                    </div>
-                  </Tab>
-
-                  {/* Tables Tab */}
-                  <Tab eventKey="tables" title={
-                    <span><i className="fas fa-table me-2"></i>Tables ({document.tables?.length || 0})</span>
-                  }>
-                    <div className="p-4">
-                      {document.tables?.length > 0 ? (
-                        <div className="d-flex flex-column gap-4">
-                          {document.tables.map((table, index) => (
-                            <Card key={index} className="border">
-                              <Card.Header className="bg-light">
-                                <div className="d-flex justify-content-between align-items-center">
-                                  <h6 className="mb-0">
-                                    Table {table.table_id || index + 1}
-                                    {table.page && <span className="text-muted"> (Page {table.page})</span>}
-                                  </h6>
-                                  <div className="d-flex gap-2">
-                                    {table.accuracy && (
-                                      <Badge bg="info">Accuracy: {table.accuracy}%</Badge>
-                                    )}
-                                    <Button 
-                                      variant="outline-primary" 
-                                      size="sm"
-                                      onClick={() => downloadCSV(table, `${document.filename}_table_${table.table_id || index + 1}`)}
-                                    >
-                                      <i className="fas fa-download me-1"></i>CSV
-                                    </Button>
-                                  </div>
-                                </div>
-                              </Card.Header>
-                              <Card.Body className="p-0">
-                                <div style={{overflowX: 'auto'}}>
-                                  <table className="table table-striped mb-0">
-                                    <thead className="table-dark">
-                                      <tr>
-                                        <th>#</th>
-                                        {table.data[0] && Object.keys(table.data[0]).map((header, idx) => (
-                                          <th key={idx}>{header}</th>
-                                        ))}
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {table.data.map((row, rowIdx) => (
-                                        <tr key={rowIdx}>
-                                          <td className="text-muted">{rowIdx + 1}</td>
-                                          {Object.values(row).map((cell, cellIdx) => (
-                                            <td key={cellIdx}>{cell || '—'}</td>
-                                          ))}
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </Card.Body>
-                            </Card>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-center py-5">
-                          <i className="fas fa-table fa-3x text-muted mb-3"></i>
-                          <h6 className="text-muted">No tables found</h6>
-                          <p className="text-muted">This document doesn't contain detectable table structures.</p>
-                        </div>
-                      )}
-                    </div>
-                  </Tab>
-
-                  {/* Q&A Tab */}
-                  <Tab eventKey="qa" title={
-                    <span><i className="fas fa-question-circle me-2"></i>Q&A</span>
-                  }>
-                    <div className="p-4">
-                      <QuestionAnswer documentId={id} />
-                    </div>
-                  </Tab>
-                </Tabs>
-              </Card.Body>
-            </Card>
-          </div>
-        </div>
-
-        {/* Export Modal */}
-        <Modal show={showExportModal} onHide={() => setShowExportModal(false)} size="lg">
-          <Modal.Header closeButton>
-            <Modal.Title>
-              <i className="fas fa-download me-2"></i>
-              Export Document Data
-            </Modal.Title>
-          </Modal.Header>
-          <Modal.Body>
-            <p className="text-muted mb-4">Choose the format to export your document data:</p>
-            <div className="row g-3">
-              <div className="col-md-6">
-                <Card className="h-100 border-2" style={{cursor: 'pointer'}} onClick={downloadText}>
-                  <Card.Body className="text-center p-4">
-                    <i className="fas fa-file-alt fa-3x text-primary mb-3"></i>
-                    <h6 className="fw-semibold">Text File</h6>
-                    <p className="text-muted small mb-0">Export extracted text as .txt file</p>
-                  </Card.Body>
-                </Card>
-              </div>
-              <div className="col-md-6">
-                <Card className="h-100 border-2" style={{cursor: 'pointer'}} onClick={() => downloadJSON(document, document.filename)}>
-                  <Card.Body className="text-center p-4">
-                    <i className="fas fa-code fa-3x text-success mb-3"></i>
-                    <h6 className="fw-semibold">JSON Data</h6>
-                    <p className="text-muted small mb-0">Export all data as .json file</p>
-                  </Card.Body>
-                </Card>
-              </div>
-              {document.tables?.length > 0 && (
-                <div className="col-12">
-                  <Card className="border-2" style={{cursor: 'pointer'}} onClick={() => {
-                    document.tables.forEach((table, idx) => {
-                      setTimeout(() => {
-                        downloadCSV(table, `${document.filename}_table_${table.table_id || idx + 1}`);
-                      }, idx * 100);
-                    });
-                  }}>
-                    <Card.Body className="text-center p-4">
-                      <i className="fas fa-table fa-3x text-info mb-3"></i>
-                      <h6 className="fw-semibold">All Tables (CSV)</h6>
-                      <p className="text-muted small mb-0">Export all {document.tables.length} tables as CSV files</p>
-                    </Card.Body>
-                  </Card>
+                      </Card.Body>
+                    </Card>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-5">
+                  <i className="fas fa-table fa-4x text-muted mb-4"></i>
+                  <h5 className="text-muted">No Tables Found</h5>
+                  <p className="text-muted">This document doesn't contain detectable table structures.</p>
                 </div>
               )}
             </div>
-          </Modal.Body>
-          <Modal.Footer>
-            <Button variant="outline-secondary" onClick={() => setShowExportModal(false)}>
-              Close
-            </Button>
-          </Modal.Footer>
-        </Modal>
-      </div>
-    </div>
+          </Tab>
+        </Tabs>
+      </Card>
+
+      {/* Redaction Modal */}
+      <Modal show={showRedactModal} onHide={() => setShowRedactModal(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>
+            <i className="fas fa-user-secret me-2"></i>
+            Data Redaction
+          </Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Alert variant="info" className="mb-4">
+            <i className="fas fa-info-circle me-2"></i>
+            <strong>Document:</strong> {document.filename}
+          </Alert>
+          
+          <p className="mb-4">Select the types of sensitive information to redact:</p>
+          
+          <Row>
+            {Object.entries(redactionOptions).map(([key, value]) => (
+              <Col md={6} key={key} className="mb-3">
+                <div className="form-check">
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    id={`redact-${key}`}
+                    checked={value}
+                    onChange={(e) => setRedactionOptions({
+                      ...redactionOptions,
+                      [key]: e.target.checked
+                    })}
+                  />
+                  <label className="form-check-label fw-medium" htmlFor={`redact-${key}`}>
+                    <i className={`fas fa-${getRedactionIcon(key)} me-2 text-primary`}></i>
+                    {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                  </label>
+                </div>
+              </Col>
+            ))}
+          </Row>
+          
+          <Alert variant="warning" className="mt-4">
+            <i className="fas fa-exclamation-triangle me-2"></i>
+            <strong>Warning:</strong> Redaction cannot be undone. Consider downloading the original first.
+          </Alert>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowRedactModal(false)}>
+            Cancel
+          </Button>
+          <Button 
+            variant="warning" 
+            onClick={handleRedact}
+            disabled={!Object.values(redactionOptions).some(v => v)}
+          >
+            <i className="fas fa-user-secret me-2"></i>
+            Apply Redaction
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    </Container>
   );
 };
 

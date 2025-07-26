@@ -11,7 +11,7 @@ import Templates from './pages/Templates';
 import Settings from './pages/Settings';
 import Navbar from './components/Navbar';
 import { AuthProvider, useAuth } from './services/auth';
-
+import Upload from './components/Upload';        
 import './App.css';
 
 function ProtectedRoute({ children }) {
@@ -28,6 +28,7 @@ function AppContent() {
       <Container fluid className={token ? "mt-4" : ""}>
         <Routes>
           <Route path="/login" element={token ? <Navigate to="/" /> : <Login />} />
+          <Route path="/upload" element={<Upload />} />
           <Route path="/" element={
             <ProtectedRoute>
               <Dashboard />

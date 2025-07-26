@@ -1,277 +1,234 @@
-import os
+import fitz
+import easyocr
 import cv2
 import numpy as np
-import easyocr
-from PIL import Image
-import fitz
+from PIL import Image, ImageEnhance, ImageFilter
 import logging
+import os
+import io
+from typing import Dict, List, Tuple
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class OCRProcessor:
     def __init__(self):
-        logger.info("Initializing EasyOCR processor...")
+        self.reader = None
+        self.tesseract_available = False
+        
         try:
-            self.reader = easyocr.Reader(['en'], gpu=False)
-            self.ocr_available = True
-            logger.info("EasyOCR initialized successfully!")
+            self.reader = easyocr.Reader(['en'], gpu=False, download_enabled=True)
+            logger.info("Enhanced EasyOCR initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize EasyOCR: {e}")
-            self.reader = None
-            self.ocr_available = False
-        
-        self.temp_dir = "temp_ocr"
-        os.makedirs(self.temp_dir, exist_ok=True)
-    
-    def preprocess_image(self, image):
+
         try:
-            if hasattr(image, 'mode'):
-                image = np.array(image)
-            
-            if len(image.shape) == 3 and image.shape[2] == 3:
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            
-            processed_images = []
-            processed_images.append(("original", image))
-            
-            if len(image.shape) == 3:
-                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-            else:
-                gray = image.copy()
-            
-            processed_images.append(("grayscale", gray))
-            
-            enhanced = cv2.convertScaleAbs(gray, alpha=1.2, beta=10)
-            processed_images.append(("enhanced", enhanced))
-            
-            blurred = cv2.GaussianBlur(gray, (1, 1), 0)
-            _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            processed_images.append(("threshold", thresh))
-            
-            adaptive = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                             cv2.THRESH_BINARY, 11, 2)
-            processed_images.append(("adaptive", adaptive))
-            
-            return processed_images
-        except Exception as e:
-            logger.error(f"Image preprocessing failed: {e}")
-            return [("original", image)]
-    
-    def process_document(self, file_path):
-        logger.info(f"Processing document: {file_path}")
-        
-        if not self.ocr_available:
-            return {
-                'text': 'EasyOCR not available. Please install easyocr package.',
-                'confidence': 0,
-                'word_count': 0,
-                'bounding_boxes': []
-            }
-        
+            import pytesseract
+            pytesseract.get_tesseract_version()
+            self.tesseract_available = True
+            logger.info("Tesseract OCR available as backup")
+        except:
+            logger.info("Tesseract not available")
+
+    def process_document(self, file_path: str) -> Dict:
         if not os.path.exists(file_path):
-            logger.error(f"File not found: {file_path}")
-            return {'text': '', 'confidence': 0, 'word_count': 0, 'bounding_boxes': []}
-        
+            return {'text': '', 'bounding_boxes': [], 'word_count': 0}
+
         file_ext = os.path.splitext(file_path)[1].lower()
         
         try:
             if file_ext == '.pdf':
                 return self._process_pdf(file_path)
-            elif file_ext in ['.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.webp']:
-                return self._process_image(file_path)
             else:
-                logger.warning(f"Unsupported file type: {file_ext}")
-                return {'text': 'Unsupported file format', 'confidence': 0, 'word_count': 0, 'bounding_boxes': []}
+                return self._process_image(file_path)
         except Exception as e:
             logger.error(f"Document processing failed: {e}")
-            return {'text': f'Processing failed: {str(e)}', 'confidence': 0, 'word_count': 0, 'bounding_boxes': []}
-    
-    def _process_pdf(self, file_path):
-        logger.info(f"Processing PDF: {file_path}")
-        all_text = []
-        all_boxes = []
-        total_confidence = 0
-        page_count = 0
+            return {'text': f'Error: {str(e)}', 'bounding_boxes': [], 'word_count': 0}
+
+    def _process_image(self, file_path: str) -> Dict:
+        try:
+            pil_image = Image.open(file_path)
+            
+            if self.reader:
+                image_array = np.array(pil_image)
+                
+                try:
+                    results = self.reader.readtext(image_array, detail=1, paragraph=False)
+                    
+                    if results:
+                        text_parts = []
+                        bounding_boxes = []
+                        
+                        for result in results:
+                            if len(result) >= 3 and result[2] > 0.3:
+                                bbox, text, confidence = result[:3]
+                                if text and text.strip():
+                                    text_parts.append(text.strip())
+                                    bounding_boxes.append({
+                                        'text': text.strip(),
+                                        'bbox': bbox,
+                                        'confidence': confidence
+                                    })
+                        
+                        final_text = ' '.join(text_parts)
+                        word_count = len(final_text.split()) if final_text else 0
+                        
+                        if word_count > 0:
+                            return {
+                                'text': final_text,
+                                'bounding_boxes': bounding_boxes,
+                                'word_count': word_count,
+                                'pages_processed': 1
+                            }
+                
+                except Exception as e:
+                    logger.error(f"EasyOCR failed: {e}")
+            
+            if self.tesseract_available:
+                try:
+                    import pytesseract
+                    image_array = np.array(pil_image)
+                    
+                    configs = [
+                        r'--oem 3 --psm 6',
+                        r'--oem 3 --psm 4',
+                        r'--oem 3 --psm 3',
+                        r'--oem 1 --psm 6'
+                    ]
+                    
+                    best_text = ""
+                    best_word_count = 0
+                    
+                    for config in configs:
+                        try:
+                            text = pytesseract.image_to_string(image_array, config=config)
+                            if text:
+                                text = text.strip()
+                                word_count = len(text.split())
+                                if word_count > best_word_count:
+                                    best_text = text
+                                    best_word_count = word_count
+                        except:
+                            continue
+                    
+                    if best_word_count > 0:
+                        return {
+                            'text': best_text,
+                            'bounding_boxes': [],
+                            'word_count': best_word_count,
+                            'pages_processed': 1
+                        }
+                
+                except Exception as e:
+                    logger.error(f"Tesseract failed: {e}")
+            
+            return {'text': 'No OCR engine available', 'bounding_boxes': [], 'word_count': 0}
+            
+        except Exception as e:
+            logger.error(f"Image processing error: {e}")
+            return {'text': f'Image error: {str(e)}', 'bounding_boxes': [], 'word_count': 0}
+
+    def _process_pdf(self, file_path: str) -> Dict:
+        full_text = []
+        all_bounding_boxes = []
+        total_words = 0
         
         try:
-            pdf_document = fitz.open(file_path)
+            doc = fitz.open(file_path)
             
-            for page_num in range(len(pdf_document)):
-                page = pdf_document.load_page(page_num)
-                extracted_text = page.get_text()
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
                 
-                if extracted_text.strip() and len(extracted_text.strip()) > 50:
-                    all_text.append(f"Page {page_num + 1}:\n{extracted_text}")
-                    total_confidence += 0.95
-                    page_count += 1
-                    logger.info(f"Page {page_num + 1}: Extracted {len(extracted_text)} characters (text-based)")
-                    continue
+                page_text = page.get_text()
                 
-                logger.info(f"Page {page_num + 1}: Using OCR (image-based)")
-                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-                img_data = pix.tobytes("png")
-                
-                nparr = np.frombuffer(img_data, np.uint8)
-                img_np = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                
-                if img_np is not None:
-                    ocr_result = self._process_image_array(img_np, f"page_{page_num + 1}")
-                    if ocr_result['text'].strip():
-                        all_text.append(f"Page {page_num + 1}:\n{ocr_result['text']}")
-                        all_boxes.extend(ocr_result['bounding_boxes'])
-                        total_confidence += ocr_result['confidence']
-                        page_count += 1
-                        logger.info(f"Page {page_num + 1}: OCR extracted {len(ocr_result['text'])} characters")
+                if page_text.strip() and len(page_text.split()) > 3:
+                    full_text.append(f"\n=== PAGE {page_num + 1} ===\n")
+                    full_text.append(page_text)
+                    total_words += len(page_text.split())
+                else:
+                    try:
+                        mat = fitz.Matrix(2.0, 2.0)
+                        pix = page.get_pixmap(matrix=mat, alpha=False)
+                        img_data = pix.tobytes("png")
+                        
+                        pil_image = Image.open(io.BytesIO(img_data))
+                        image_array = np.array(pil_image)
+                        
+                        if self.reader:
+                            try:
+                                results = self.reader.readtext(image_array, detail=1)
+                                if results:
+                                    text_parts = []
+                                    for result in results:
+                                        if len(result) >= 3 and result[2] > 0.3:
+                                            text_parts.append(result[1].strip())
+                                    
+                                    if text_parts:
+                                        ocr_text = ' '.join(text_parts)
+                                        full_text.append(f"\n=== PAGE {page_num + 1} ===\n")
+                                        full_text.append(ocr_text)
+                                        total_words += len(ocr_text.split())
+                            except:
+                                pass
+                        
+                        elif self.tesseract_available:
+                            try:
+                                import pytesseract
+                                text = pytesseract.image_to_string(image_array, config=r'--oem 3 --psm 6')
+                                if text.strip():
+                                    full_text.append(f"\n=== PAGE {page_num + 1} ===\n")
+                                    full_text.append(text.strip())
+                                    total_words += len(text.split())
+                            except:
+                                pass
+                    
+                    except Exception as e:
+                        logger.error(f"Page {page_num + 1} OCR failed: {e}")
+
+            doc.close()
             
-            pdf_document.close()
-            
-            combined_text = '\n\n'.join(all_text)
-            avg_confidence = (total_confidence / page_count) if page_count > 0 else 0
-            word_count = len(combined_text.split()) if combined_text else 0
-            
-            logger.info(f"PDF processing complete: {word_count} words from {page_count} pages (avg confidence: {avg_confidence:.2f})")
+            final_text = ''.join(full_text)
             
             return {
-                'text': combined_text,
-                'confidence': avg_confidence,
-                'word_count': word_count,
-                'bounding_boxes': all_boxes,
-                'pages_processed': page_count,
-                'method': 'hybrid'
+                'text': final_text,
+                'bounding_boxes': all_bounding_boxes,
+                'word_count': total_words,
+                'pages_processed': len(doc)
             }
+            
         except Exception as e:
             logger.error(f"PDF processing failed: {e}")
-            return {'text': f'PDF processing failed: {str(e)}', 'confidence': 0, 'word_count': 0, 'bounding_boxes': []}
-    
-    def _process_image(self, file_path):
-        logger.info(f"Processing image: {file_path}")
-        
-        try:
-            image = cv2.imread(file_path)
-            if image is None:
-                pil_image = Image.open(file_path)
-                image = np.array(pil_image.convert('RGB'))
-            
-            return self._process_image_array(image, os.path.basename(file_path))
-        except Exception as e:
-            logger.error(f"Image loading failed: {e}")
-            return {'text': f'Image loading failed: {str(e)}', 'confidence': 0, 'word_count': 0, 'bounding_boxes': []}
-    
-    def _process_image_array(self, image, image_name="image"):
-        if not self.ocr_available:
-            return {'text': 'EasyOCR not available', 'confidence': 0, 'word_count': 0, 'bounding_boxes': []}
-        
-        try:
-            processed_images = self.preprocess_image(image)
-            best_result = {'text': '', 'confidence': 0, 'bounding_boxes': []}
-            
-            for method_name, processed_img in processed_images:
-                try:
-                    logger.info(f"Trying OCR with method: {method_name}")
-                    
-                    if len(processed_img.shape) == 3:
-                        ocr_image = processed_img
-                    else:
-                        ocr_image = cv2.cvtColor(processed_img, cv2.COLOR_GRAY2RGB)
-                    
-                    results = self.reader.readtext(ocr_image, detail=1, paragraph=False)
-                    
-                    texts = []
-                    boxes = []
-                    confidences = []
-                    
-                    for (bbox, text, confidence) in results:
-                        if confidence > 0.3:
-                            texts.append(text)
-                            confidences.append(confidence)
-                            x1 = min([point[0] for point in bbox])
-                            y1 = min([point[1] for point in bbox])
-                            x2 = max([point[0] for point in bbox])
-                            y2 = max([point[1] for point in bbox])
-                            
-                            boxes.append({
-                                'text': text,
-                                'confidence': confidence * 100,
-                                'bbox': [int(x1), int(y1), int(x2), int(y2)]
-                            })
-                    
-                    combined_text = ' '.join(texts)
-                    avg_confidence = sum(confidences) / len(confidences) if confidences else 0
-                    
-                    if len(combined_text.strip()) > len(best_result['text'].strip()):
-                        best_result = {
-                            'text': combined_text,
-                            'confidence': avg_confidence,
-                            'bounding_boxes': boxes,
-                            'method': method_name
-                        }
-                        logger.info(f"Better result with {method_name}: {len(combined_text)} chars, confidence: {avg_confidence:.2f}")
-                except Exception as method_error:
-                    logger.warning(f"Method {method_name} failed: {method_error}")
-                    continue
-            
-            word_count = len(best_result['text'].split()) if best_result['text'] else 0
-            
-            logger.info(f"{image_name} OCR complete: {word_count} words (confidence: {best_result['confidence']:.2f})")
-            
-            return {
-                'text': best_result['text'],
-                'confidence': best_result['confidence'],
-                'word_count': word_count,
-                'bounding_boxes': best_result['bounding_boxes'],
-                'method_used': best_result.get('method', 'unknown')
-            }
-        except Exception as e:
-            logger.error(f"EasyOCR processing failed: {e}")
-            return {'text': f'OCR processing failed: {str(e)}', 'confidence': 0, 'word_count': 0, 'bounding_boxes': []}
-    
-    def extract_layout_elements(self, file_path):
+            return {'text': f'PDF error: {str(e)}', 'bounding_boxes': [], 'word_count': 0}
+
+    def extract_layout_elements(self, file_path: str) -> Dict:
         try:
             result = self.process_document(file_path)
-            layout = {
-                'text_blocks': [],
-                'word_count': result.get('word_count', 0),
-                'confidence': result.get('confidence', 0),
-                'method': 'easyocr'
+            text = result.get('text', '')
+            
+            if not text:
+                return {'headers': [], 'paragraphs': [], 'lists': [], 'tables': []}
+            
+            lines = [line.strip() for line in text.split('\n') if line.strip()]
+            headers = []
+            paragraphs = []
+            lists = []
+            
+            for line in lines:
+                if len(line) < 80 and (line.isupper() or line.istitle()):
+                    headers.append(line)
+                elif line.startswith(('•', '-', '*', '1.', '2.', '3.')):
+                    lists.append(line)
+                elif len(line) > 20:
+                    paragraphs.append(line)
+            
+            return {
+                'headers': headers[:10],
+                'paragraphs': paragraphs[:20],
+                'lists': lists[:15],
+                'tables': []
             }
             
-            for box in result.get('bounding_boxes', []):
-                layout['text_blocks'].append({
-                    'text': box['text'],
-                    'bbox': box['bbox'],
-                    'confidence': box['confidence'],
-                    'type': 'text'
-                })
-            
-            return layout
         except Exception as e:
             logger.error(f"Layout extraction failed: {e}")
-            return {
-                'text_blocks': [],
-                'word_count': 0,
-                'confidence': 0,
-                'method': 'easyocr',
-                'error': str(e)
-            }
-
-    @property
-    def tesseract_available(self):
-        return self.ocr_available
-
-    def get_supported_languages(self):
-        if self.ocr_available:
-            return self.reader.lang_list
-        return []
-
-    def add_language(self, lang_code):
-        try:
-            current_langs = self.reader.lang_list if self.ocr_available else ['en']
-            if lang_code not in current_langs:
-                new_langs = current_langs + [lang_code]
-                self.reader = easyocr.Reader(new_langs, gpu=False)
-                logger.info(f"Added language: {lang_code}")
-                return True
-        except Exception as e:
-            logger.error(f"Failed to add language {lang_code}: {e}")
-        return False
+            return {'headers': [], 'paragraphs': [], 'lists': [], 'tables': []}

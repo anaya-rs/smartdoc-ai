@@ -1,19 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Row, Col, Card, Table, Button, Form, InputGroup, 
+  Container, Row, Col, Card, Table, Button, Form, InputGroup, 
   Badge, Alert, Spinner, Modal 
 } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import ProcessingStatus from '../components/ProcessingStatus';
+import { useDocumentProcessing } from '../hooks/useWebSocket';
 
 const Documents = () => {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('');
   const [showRedactModal, setShowRedactModal] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState(null);
+  const [processingDocId, setProcessingDocId] = useState(null);
   const [redactionOptions, setRedactionOptions] = useState({
     names: true,
     emails: true,
@@ -24,6 +28,7 @@ const Documents = () => {
     credit_cards: true
   });
 
+  const { processingStatus } = useDocumentProcessing(processingDocId);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -74,37 +79,50 @@ const Documents = () => {
       await axios.post(`/redact/${selectedDoc.id}`, redactionOptions);
       setShowRedactModal(false);
       setSelectedDoc(null);
+      setSuccess(`Document "${selectedDoc.filename}" redacted successfully`);
       fetchDocuments();
-      // Show success message
-      setError('');
+      
+      setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
       setError('Redaction failed');
       console.error('Redaction error:', err);
     }
   };
 
-  const handleProcessDocument = async (documentId) => {
+  const handleProcessDocument = async (documentId, filename) => {
     try {
       setError('');
+      setProcessingDocId(documentId);
+      
       await axios.post(`/process/${documentId}`);
+      setSuccess(`Processing started for "${filename}"`);
       fetchDocuments();
+      
+      setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
       setError('Processing failed');
       console.error('Processing error:', err);
+      setProcessingDocId(null);
     }
   };
 
-  const handleDeleteDocument = async (documentId) => {
-    if (!window.confirm('Are you sure you want to delete this document?')) {
+  const handleDeleteDocument = async (documentId, filename) => {
+    if (!window.confirm(`Are you sure you want to delete "${filename}"? This action cannot be undone.`)) {
       return;
     }
 
     try {
+      setError('');
       await axios.delete(`/documents/${documentId}`);
-      fetchDocuments();
+      
+      setDocuments(prev => prev.filter(doc => doc.id !== documentId));
+      setSuccess(`Document "${filename}" deleted successfully`);
+      
+      setTimeout(() => setSuccess(''), 3000);
+      
     } catch (err) {
-      setError('Failed to delete document');
       console.error('Delete error:', err);
+      setError('Failed to delete document: ' + (err.response?.data?.detail || err.message));
     }
   };
 
@@ -147,13 +165,25 @@ const Documents = () => {
     );
   };
 
+  const getRedactionIcon = (type) => {
+    const icons = {
+      'names': 'user',
+      'emails': 'envelope',
+      'phones': 'phone',
+      'ssn': 'id-card',
+      'addresses': 'map-marker-alt',
+      'dates_of_birth': 'birthday-cake',
+      'credit_cards': 'credit-card'
+    };
+    return icons[type] || 'shield-alt';
+  };
+
   const clearFilters = () => {
     setSearchTerm('');
     setFilterType('');
     fetchDocuments();
   };
 
-  // Filter documents locally as well for immediate feedback
   const filteredDocuments = documents.filter(doc => {
     const matchesSearch = !searchTerm || 
       doc.filename.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -164,25 +194,25 @@ const Documents = () => {
     return matchesSearch && matchesFilter;
   });
 
-  // Get unique document types for filter dropdown
   const documentTypes = [...new Set(documents.map(doc => doc.document_type).filter(Boolean))];
 
   if (loading && documents.length === 0) {
     return (
-      <div className="d-flex justify-content-center align-items-center" style={{ height: '50vh' }}>
-        <Spinner animation="border" role="status">
-          <span className="visually-hidden">Loading...</span>
-        </Spinner>
-      </div>
+      <Container fluid className="py-4">
+        <div className="d-flex justify-content-center align-items-center" style={{ height: '50vh' }}>
+          <Spinner animation="border" role="status">
+            <span className="visually-hidden">Loading...</span>
+          </Spinner>
+        </div>
+      </Container>
     );
   }
 
   return (
-    <div>
-      {/* Header */}
+    <Container fluid className="py-4">
       <div className="d-flex justify-content-between align-items-center mb-4">
-        <h1>
-          <i className="fas fa-file-alt me-2"></i>
+        <h1 className="fw-bold">
+          <i className="fas fa-file-invoice me-2 text-primary"></i>
           Documents
         </h1>
         <Button variant="primary" onClick={() => navigate('/')}>
@@ -191,7 +221,6 @@ const Documents = () => {
         </Button>
       </div>
 
-      {/* Error Alert */}
       {error && (
         <Alert variant="danger" dismissible onClose={() => setError('')}>
           <i className="fas fa-exclamation-triangle me-2"></i>
@@ -199,11 +228,24 @@ const Documents = () => {
         </Alert>
       )}
 
-      {/* Search and Filter Section */}
-      <Card className="mb-4">
-        <Card.Header>
+      {success && (
+        <Alert variant="success" dismissible onClose={() => setSuccess('')}>
+          <i className="fas fa-check-circle me-2"></i>
+          {success}
+        </Alert>
+      )}
+
+      {processingStatus && (
+        <ProcessingStatus 
+          status={processingStatus} 
+          className="mb-4"
+        />
+      )}
+
+      <Card className="mb-4 border-0 shadow-sm">
+        <Card.Header className="bg-transparent border-bottom border-light">
           <h5 className="mb-0">
-            <i className="fas fa-search me-2"></i>
+            <i className="fas fa-search me-2 text-primary"></i>
             Search & Filter
           </h5>
         </Card.Header>
@@ -267,9 +309,8 @@ const Documents = () => {
         </Card.Body>
       </Card>
 
-      {/* Documents Table */}
-      <Card>
-        <Card.Header className="d-flex justify-content-between align-items-center">
+      <Card className="border-0 shadow-sm">
+        <Card.Header className="d-flex justify-content-between align-items-center bg-transparent border-bottom border-light">
           <h5 className="mb-0">
             Documents ({filteredDocuments.length})
           </h5>
@@ -279,7 +320,7 @@ const Documents = () => {
             </small>
           )}
         </Card.Header>
-        <Card.Body>
+        <Card.Body className="p-0">
           {filteredDocuments.length === 0 ? (
             <div className="text-center py-5">
               <i className="fas fa-file-alt fa-4x text-muted mb-3"></i>
@@ -297,7 +338,7 @@ const Documents = () => {
             </div>
           ) : (
             <div className="table-responsive">
-              <Table hover>
+              <Table hover className="mb-0">
                 <thead className="table-light">
                   <tr>
                     <th>
@@ -386,7 +427,7 @@ const Documents = () => {
                             <Button
                               variant="outline-success"
                               size="sm"
-                              onClick={() => handleProcessDocument(doc.id)}
+                              onClick={() => handleProcessDocument(doc.id, doc.filename)}
                               title="Process Document"
                             >
                               <i className="fas fa-cog"></i>
@@ -410,7 +451,7 @@ const Documents = () => {
                           <Button
                             variant="outline-danger"
                             size="sm"
-                            onClick={() => handleDeleteDocument(doc.id)}
+                            onClick={() => handleDeleteDocument(doc.id, doc.filename)}
                             title="Delete Document"
                           >
                             <i className="fas fa-trash"></i>
@@ -426,7 +467,6 @@ const Documents = () => {
         </Card.Body>
       </Card>
 
-      {/* Redaction Modal */}
       <Modal 
         show={showRedactModal} 
         onHide={() => setShowRedactModal(false)}
@@ -493,22 +533,8 @@ const Documents = () => {
           </Button>
         </Modal.Footer>
       </Modal>
-    </div>
+    </Container>
   );
-
-  // Helper function to get icon for redaction types
-  function getRedactionIcon(type) {
-    const icons = {
-      'names': 'user',
-      'emails': 'envelope',
-      'phones': 'phone',
-      'ssn': 'id-card',
-      'addresses': 'map-marker-alt',
-      'dates_of_birth': 'birthday-cake',
-      'credit_cards': 'credit-card'
-    };
-    return icons[type] || 'shield-alt';
-  }
 };
 
 export default Documents;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Form, Button, Alert, Badge, ListGroup, Spinner } from 'react-bootstrap';
+import { Card, Form, Button, Alert, ListGroup, Badge, Spinner } from 'react-bootstrap';
 import axios from 'axios';
 
 const QuestionAnswer = ({ documentId }) => {
@@ -8,7 +8,7 @@ const QuestionAnswer = ({ documentId }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [suggestions, setSuggestions] = useState([]);
-  const [chatHistory, setChatHistory] = useState([]);
+  const [conversationHistory, setConversationHistory] = useState([]);
 
   useEffect(() => {
     fetchSuggestions();
@@ -17,112 +17,131 @@ const QuestionAnswer = ({ documentId }) => {
   const fetchSuggestions = async () => {
     try {
       const response = await axios.get(`/suggestions/${documentId}`);
-      setSuggestions(response.data.suggestions);
+      setSuggestions(response.data.suggestions || []);
     } catch (err) {
-      console.error('Error fetching suggestions:', err);
+      console.error('Failed to fetch suggestions:', err);
     }
   };
 
-  const askQuestion = async (questionText = question) => {
-    if (!questionText.trim()) return;
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!question.trim()) return;
 
     setLoading(true);
     setError('');
-
+    
     try {
       const response = await axios.post(`/ask/${documentId}`, {
-        question: questionText
+        question: question.trim()
       });
-
+      
       const newQA = {
-        id: Date.now(),
-        question: questionText,
-        answer: response.data.answer,
-        confidence: response.data.confidence,
-        questionType: response.data.question_type,
-        sources: response.data.sources,
-        timestamp: new Date()
+        question: question.trim(),
+        ...response.data,
+        timestamp: new Date().toLocaleTimeString()
       };
-
-      setChatHistory(prev => [...prev, newQA]);
+      
       setAnswer(newQA);
+      setConversationHistory(prev => [newQA, ...prev]);
       setQuestion('');
+      
     } catch (err) {
-      setError('Failed to process question: ' + (err.response?.data?.detail || err.message));
+      console.error('Q&A error:', err);
+      setError('Failed to get answer: ' + (err.response?.data?.detail || err.message));
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    askQuestion();
+  const handleSuggestionClick = (suggestion) => {
+    setQuestion(suggestion);
   };
 
-  const handleSuggestionClick = (suggestionText) => {
-    setQuestion(suggestionText);
-    askQuestion(suggestionText);
+  const getConfidenceColor = (confidence) => {
+    if (confidence >= 0.8) return 'success';
+    if (confidence >= 0.6) return 'warning';
+    if (confidence >= 0.4) return 'info';
+    return 'secondary';
   };
 
-  const getConfidenceBadge = (confidence) => {
-    if (confidence >= 0.8) return <Badge bg="success">High Confidence</Badge>;
-    if (confidence >= 0.6) return <Badge bg="warning">Medium Confidence</Badge>;
-    return <Badge bg="secondary">Low Confidence</Badge>;
+  const getConfidenceText = (confidence) => {
+    if (confidence >= 0.8) return 'High';
+    if (confidence >= 0.6) return 'Medium';
+    if (confidence >= 0.4) return 'Low';
+    return 'Very Low';
   };
 
   return (
-    <div>
+    <div className="question-answer-container">
+      {error && (
+        <Alert variant="danger" className="mb-4">
+          <i className="fas fa-exclamation-triangle me-2"></i>
+          {error}
+        </Alert>
+      )}
+
       {/* Question Input */}
-      <Card className="mb-3">
-        <Card.Header>
-          <h6>
-            <i className="fas fa-question-circle me-2"></i>
-            Ask Questions About This Document
-          </h6>
-        </Card.Header>
-        <Card.Body>
+      <Card className="border-0 shadow-sm mb-4">
+        <Card.Body className="p-4">
           <Form onSubmit={handleSubmit}>
-            <div className="d-flex gap-2">
-              <Form.Control
-                type="text"
-                placeholder="Ask a question about this document..."
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                disabled={loading}
-              />
+            <div className="d-flex align-items-center mb-3">
+              <div className="bg-primary bg-opacity-10 rounded-circle p-2 me-3">
+                <i className="fas fa-question-circle text-primary"></i>
+              </div>
+              <h6 className="mb-0 fw-semibold">Ask a Question</h6>
+            </div>
+            
+            <div className="d-flex gap-3 align-items-end">
+              <div className="flex-grow-1">
+                <Form.Control
+                  type="text"
+                  placeholder="Ask anything about this document..."
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  disabled={loading}
+                  className="border-0 bg-light"
+                  style={{
+                    fontSize: '14px',
+                    padding: '12px 16px',
+                    borderRadius: '8px'
+                  }}
+                />
+              </div>
               <Button 
                 type="submit" 
-                variant="primary"
-                disabled={loading || !question.trim()}
+                disabled={!question.trim() || loading}
+                className="d-flex align-items-center gap-2 px-4"
+                style={{ borderRadius: '8px', minWidth: '100px' }}
               >
                 {loading ? (
-                  <Spinner size="sm" />
+                  <>
+                    <Spinner size="sm" />
+                    Asking...
+                  </>
                 ) : (
-                  <i className="fas fa-paper-plane"></i>
+                  <>
+                    <i className="fas fa-paper-plane"></i>
+                    Ask
+                  </>
                 )}
               </Button>
             </div>
           </Form>
-
-          {error && (
-            <Alert variant="danger" className="mt-2">
-              <i className="fas fa-exclamation-triangle me-2"></i>
-              {error}
-            </Alert>
-          )}
         </Card.Body>
       </Card>
 
       {/* Suggested Questions */}
       {suggestions.length > 0 && (
-        <Card className="mb-3">
-          <Card.Header>
-            <small className="text-muted">
-              <i className="fas fa-lightbulb me-2"></i>
-              Suggested Questions
-            </small>
+        <Card className="border-0 shadow-sm mb-4">
+          <Card.Header className="bg-transparent border-bottom border-light">
+            <div className="d-flex align-items-center">
+              <div className="bg-info bg-opacity-10 rounded-circle p-2 me-3">
+                <i className="fas fa-lightbulb text-info"></i>
+              </div>
+              <h6 className="mb-0 fw-semibold">Suggested Questions</h6>
+            </div>
           </Card.Header>
-          <Card.Body>
+          <Card.Body className="p-3">
             <div className="d-flex flex-wrap gap-2">
               {suggestions.map((suggestion, index) => (
                 <Button
@@ -131,6 +150,12 @@ const QuestionAnswer = ({ documentId }) => {
                   size="sm"
                   onClick={() => handleSuggestionClick(suggestion)}
                   disabled={loading}
+                  className="rounded-pill"
+                  style={{ 
+                    fontSize: '13px',
+                    padding: '6px 16px',
+                    whiteSpace: 'nowrap'
+                  }}
                 >
                   {suggestion}
                 </Button>
@@ -140,55 +165,99 @@ const QuestionAnswer = ({ documentId }) => {
         </Card>
       )}
 
-      {/* Chat History */}
-      {chatHistory.length > 0 && (
-        <Card>
-          <Card.Header>
-            <h6>
-              <i className="fas fa-comments me-2"></i>
-              Q&A History
-            </h6>
+      {/* Current Answer */}
+      {answer && (
+        <Card className="border-0 shadow-sm mb-4">
+          <Card.Header className="bg-transparent border-bottom border-light">
+            <div className="d-flex justify-content-between align-items-center">
+              <div className="d-flex align-items-center">
+                <div className="bg-success bg-opacity-10 rounded-circle p-2 me-3">
+                  <i className="fas fa-robot text-success"></i>
+                </div>
+                <h6 className="mb-0 fw-semibold">Answer</h6>
+              </div>
+              <div className="d-flex align-items-center gap-2">
+                <Badge bg={getConfidenceColor(answer.confidence)} className="px-3 py-2">
+                  {getConfidenceText(answer.confidence)} ({Math.round(answer.confidence * 100)}%)
+                </Badge>
+                <small className="text-muted">{answer.timestamp}</small>
+              </div>
+            </div>
           </Card.Header>
-          <Card.Body style={{ maxHeight: '400px', overflowY: 'auto' }}>
-            <ListGroup variant="flush">
-              {chatHistory.map((qa) => (
-                <ListGroup.Item key={qa.id} className="border-0 px-0">
-                  {/* Question */}
-                  <div className="mb-2">
-                    <strong className="text-primary">
-                      <i className="fas fa-user me-2"></i>
+          <Card.Body className="p-4">
+            <div className="mb-3">
+              <div className="bg-light rounded p-3 mb-3">
+                <div className="d-flex align-items-start">
+                  <div className="bg-primary bg-opacity-10 rounded-circle p-2 me-3 mt-1" style={{minWidth: '36px'}}>
+                    <i className="fas fa-user text-primary" style={{fontSize: '14px'}}></i>
+                  </div>
+                  <div className="flex-grow-1">
+                    <strong className="text-primary">You asked:</strong>
+                    <p className="mb-0 mt-1" style={{fontSize: '14px'}}>{answer.question}</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="d-flex align-items-start">
+                <div className="bg-success bg-opacity-10 rounded-circle p-2 me-3 mt-1" style={{minWidth: '36px'}}>
+                  <i className="fas fa-robot text-success" style={{fontSize: '14px'}}></i>
+                </div>
+                <div className="flex-grow-1">
+                  <strong className="text-success">SmartDoc AI:</strong>
+                  <div className="mt-2" style={{fontSize: '14px', lineHeight: '1.6'}}>
+                    {answer.answer}
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {answer.sources && answer.sources.length > 0 && (
+              <div className="border-top pt-3">
+                <small className="text-muted">
+                  <i className="fas fa-info-circle me-1"></i>
+                  Sources: {answer.sources.join(', ')}
+                </small>
+              </div>
+            )}
+          </Card.Body>
+        </Card>
+      )}
+
+      {/* Conversation History */}
+      {conversationHistory.length > 1 && (
+        <Card className="border-0 shadow-sm">
+          <Card.Header className="bg-transparent border-bottom border-light">
+            <div className="d-flex justify-content-between align-items-center">
+              <div className="d-flex align-items-center">
+                <div className="bg-secondary bg-opacity-10 rounded-circle p-2 me-3">
+                  <i className="fas fa-history text-secondary"></i>
+                </div>
+                <h6 className="mb-0 fw-semibold">Previous Questions</h6>
+              </div>
+              <Badge bg="secondary" pill>{conversationHistory.length - 1}</Badge>
+            </div>
+          </Card.Header>
+          <Card.Body className="p-0">
+            <div style={{maxHeight: '400px', overflowY: 'auto'}}>
+              {conversationHistory.slice(1).map((qa, index) => (
+                <div key={index} className="border-bottom border-light p-4">
+                  <div className="d-flex justify-content-between align-items-start mb-2">
+                    <strong className="text-primary" style={{fontSize: '14px'}}>
                       Q: {qa.question}
                     </strong>
+                    <div className="d-flex align-items-center gap-2">
+                      <Badge bg={getConfidenceColor(qa.confidence)} size="sm">
+                        {Math.round(qa.confidence * 100)}%
+                      </Badge>
+                      <small className="text-muted">{qa.timestamp}</small>
+                    </div>
                   </div>
-                  
-                  {/* Answer */}
-                  <div className="mb-2">
-                    <i className="fas fa-robot me-2 text-success"></i>
+                  <div className="text-muted" style={{fontSize: '13px', lineHeight: '1.5'}}>
                     <strong>A:</strong> {qa.answer}
                   </div>
-                  
-                  {/* Metadata */}
-                  <div className="d-flex justify-content-between align-items-center">
-                    <div>
-                      {getConfidenceBadge(qa.confidence)}
-                      <Badge bg="info" className="ms-2">{qa.questionType}</Badge>
-                      {qa.sources.map((source, idx) => (
-                        <Badge key={idx} bg="secondary" className="ms-1">
-                          {source}
-                        </Badge>
-                      ))}
-                    </div>
-                    <small className="text-muted">
-                      {qa.timestamp.toLocaleTimeString()}
-                    </small>
-                  </div>
-                  
-                  {qa !== chatHistory[chatHistory.length - 1] && (
-                    <hr className="mt-2" />
-                  )}
-                </ListGroup.Item>
+                </div>
               ))}
-            </ListGroup>
+            </div>
           </Card.Body>
         </Card>
       )}
